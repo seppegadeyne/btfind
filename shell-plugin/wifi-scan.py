@@ -35,6 +35,26 @@ def probe_targets(networks):
     return list(dict.fromkeys(targets))[:254]
 
 
+def vendor_of(mac, cache={}):
+    """IEEE OUI lookup via hwdata; cached per prefix."""
+    if not mac or len(mac) < 8:
+        return ''
+    prefix = mac.replace(':', '').upper()[:6]
+    if prefix in cache:
+        return cache[prefix]
+    vendor = ''
+    try:
+        with open('/usr/share/hwdata/oui.txt', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                if line.startswith(prefix) and '(base 16)' in line:
+                    vendor = line.rstrip('\n').split('\t')[-1].strip()
+                    break
+    except OSError:
+        pass
+    cache[prefix] = vendor
+    return vendor
+
+
 def collect(probe=False):
     networks = []
     interfaces = re.findall(r'^\s*Interface (\S+)', run(['iw', 'dev']), re.M)
@@ -83,7 +103,8 @@ def collect(probe=False):
     for net in networks:
         if 'Connected to ' + net['identity'].split('|')[1] not in run(['iw', 'dev', net['iface'], 'link']):
             return dict(networks=[], neighbors=[], mdns='', names={}, message='WiFi gewijzigd; volgende meting afwachten.')
-    return dict(networks=networks, neighbors=neighbors, mdns=mdns, names=names, message=message)
+    vendors = {n['dst']: vendor_of(n.get('lladdr', '')) for n in neighbors if n.get('lladdr')}
+    return dict(networks=networks, neighbors=neighbors, mdns=mdns, names=names, vendors=vendors, message=message)
 
 
 if __name__ == '__main__':

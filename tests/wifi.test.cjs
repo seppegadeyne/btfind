@@ -32,3 +32,19 @@ test('WiFi merges same-subnet ARP and escaped mDNS names without trusting stale 
  assert.equal(result.devices[1].online,null);
  assert.equal(model.parseWifi('not json'),null);
 });
+test('WiFi and BT labels fall back to OUI vendor when hostname is unknown', () => {
+ const snap = {networks:[{iface:'w',cidr:'10.0.0.9/24',identity:'w|a|10.0.0.0/24'}],
+   neighbors:[{dev:'w',dst:'10.0.0.1',lladdr:'78:8a:20:bc:67:9a',state:['REACHABLE']}],
+   names:{}, vendors:{'10.0.0.1':'Ubiquiti Inc'}};
+ const store = {};
+ model.updateWifi(store, model.parseWifi(JSON.stringify(snap)), 1000);
+ const row = model.wifiRows(store, 2000)[0];
+ assert.equal(row.vendor, 'Ubiquiti Inc');
+ assert.equal(row.label, 'Ubiquiti Inc · 10.0.0.1');
+ const devices = {};
+ model.update(devices, {mac:'AA:BB:CC:DD:EE:FF', name:'', rssi:-60}, 1000);
+ const bt = model.rows(devices, {}, 2000, {'AA:BB:CC:DD:EE:FF':'Apple, Inc.'})[0];
+ assert.equal(bt.label, 'Apple, Inc.');
+ assert.equal(bt.named, false);
+ assert.equal(bt.vendor, 'Apple, Inc.');
+});

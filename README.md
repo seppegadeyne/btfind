@@ -128,7 +128,9 @@ volledige router-clientlijst: ook bekabelde apparaten kunnen verschijnen.
   normale ARP-resolutie; een apparaat kan daardoor zichtbaar worden zelfs als
   het ICMP blokkeert. Gebruik dit alleen op netwerken die je mag scannen.
 - Namen, IPv4-adres, MAC (of **MAC onbekend** bij alleen mDNS), eerste waarneming
-  en laatste bevestiging worden getoond. **ONLINE** betekent dat de kernel de
+  en laatste bevestiging worden getoond. Apparaten zonder hostname krijgen de
+  fabrikantnaam uit de IEEE OUI-database (`/usr/share/hwdata/oui.txt`) als
+  label, ook bij Bluetooth. **ONLINE** betekent dat de kernel de
   buur als `REACHABLE` kent, niet dat we het apparaat fysiek dichtbij meten.
   **ONBEKEND** is een onbevestigde cache/mDNS-vermelding (`STALE`, `DELAY`,
   `PROBE`, statische ARP). **OFFLINE?** betekent `FAILED` of meer dan 90 seconden

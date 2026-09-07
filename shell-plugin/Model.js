@@ -14,7 +14,7 @@ function parseWifi(raw) {
     var s;
     try { s = JSON.parse(raw); } catch (e) { return null; }
     if (!s || !Array.isArray(s.networks) || !Array.isArray(s.neighbors)) return null;
-    var found = {}, names = s.names || {};
+    var found = {}, names = s.names || {}, vendors = s.vendors || {};
     function networkFor(iface, ip) {
         return s.networks.find(function(n) { return n.iface === iface && wifiContains(n.cidr, ip) && n.cidr.split('/')[0] !== ip; });
     }
@@ -24,6 +24,7 @@ function parseWifi(raw) {
         var state = Array.isArray(n.state) ? n.state : [n.state];
         found[n.dev+'|'+n.dst] = {key:net.identity+'|'+n.lladdr.toUpperCase(), network:net.identity,
             iface:n.dev, ip:n.dst, mac:n.lladdr.toUpperCase(), name:names[n.dst] || '',
+            vendor:vendors[n.dst] || '',
             online:state.indexOf('REACHABLE') >= 0 ? true : state.indexOf('FAILED') >= 0 ? false : null};
     });
     String(s.mdns || '').split('\n').forEach(function(line) {
@@ -48,14 +49,14 @@ function updateWifi(store, snapshot, now) {
         // Upgrade an mDNS-only address once ARP supplies its MAC.
         var provisional = d.network+'|'+d.ip;
         if (!old && d.mac && store[provisional]) {old = store[provisional]; delete store[provisional];}
-        store[d.key] = Object.assign({}, d, {name:d.name || (old ? old.name : ''),
+        store[d.key] = Object.assign({}, d, {name:d.name || (old ? old.name : ''), vendor:d.vendor || (old ? old.vendor : ''),
             first:old ? old.first : now, last:d.online === true ? now : old ? old.last : null, observed:now});
     });
 }
 function wifiRows(store, now) {
     return Object.keys(store).map(function(k) {
         var d = store[k], expired = now-(d.last === null ? d.first : d.last) > 90000;
-        return Object.assign({}, d, {label:d.name || d.ip,
+        return Object.assign({}, d, {label:d.name || (d.vendor ? d.vendor + ' · ' + d.ip : d.ip),
             status:d.online === true && !expired ? 'ONLINE' : d.online === false || expired ? 'OFFLINE?' : 'ONBEKEND'});
     }).sort(function(a,b) {return (b.status === 'ONLINE')-(a.status === 'ONLINE') || a.label.localeCompare(b.label);});
 }
@@ -70,14 +71,16 @@ function update(devices, event, now) {
     }
     d.samples = d.samples.filter(function(s) { return now - s.t <= 90000; }).slice(-600);
 }
-function rows(devices, aliases, now) {
+function rows(devices, aliases, now, vendors) {
+    vendors = vendors || {};
     return Object.keys(devices).map(function(mac) {
         var d = devices[mac], recent = d.samples.filter(function(s) { return now - s.t <= 15000; });
         var history = d.samples.filter(function(s) { return now - s.t <= 90000; });
         var trend = history.filter(function(s) { return now - s.t <= 10000; });
         var delta = trend.length > 1 ? d.ema - trend[0].ema : 0;
         var name = aliases[mac] || d.name;
-        return {mac:mac, label:name || '• ' + mac.slice(-5), named:!!name,
+        var vendor = vendors[mac] || '';
+        return {mac:mac, label:name || vendor || '• ' + mac.slice(-5), named:!!name, vendor:vendor,
             rssi:d.rssi, ema:d.ema, last:d.last, history:history,
             stale:!d.last || now - d.last > 5000,
             average:recent.length ? recent.reduce(function(n,s) {return n+s.r;},0)/recent.length : null,

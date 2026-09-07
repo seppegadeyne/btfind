@@ -39,6 +39,9 @@ Panel {
     property var rows: []
     property var resolveQueue: []
     property string resolving: ""
+    property var vendorQueue: []
+    property string vendorMac: ""
+    property var vendors: ({})
     property string selectedMac: ""
     property string cursorMac: ""
     property bool scanning: false
@@ -50,13 +53,13 @@ Panel {
     readonly property color foreground: Color.popups.text
     readonly property string family: bar ? bar.fontFamily : "monospace"
 
-    function refresh() { now = Date.now(); rows = Model.rows(devices, aliases, now); }
+    function refresh() { now = Date.now(); rows = Model.rows(devices, aliases, now, vendors); }
     function ingest(line) {
         var plain = Model.clean(line);
         if (/Failed|No default controller|not available|NotReady|NotPowered/i.test(plain)) message = plain.slice(-180);
         var event = Model.parseLine(line);
         if (!event || event.removed) return;
-        if (!devices[event.mac]) resolveQueue.push(event.mac);
+        if (!devices[event.mac]) { resolveQueue.push(event.mac); vendorQueue.push(event.mac); }
         Model.update(devices, event, Date.now());
     }
     function startScan() {
@@ -71,6 +74,7 @@ Panel {
         scan.write("scan off\nquit\n");
         stopTimeout.restart();
         resolveQueue = [];
+        vendorQueue = [];
     }
     function toggleScan() { if (!wifiMode) scanning ? stopScan() : startScan(); }
     function selectDevice(mac) {
@@ -171,6 +175,12 @@ Panel {
                 info.command = ["bluetoothctl", "--timeout", "3", "info", root.resolving];
                 info.running = true;
             }
+            if (root.opened && !oui.running && root.vendorQueue.length) {
+                root.vendorMac = root.vendorQueue.shift();
+                var prefix = root.vendorMac.replace(/:/g, "").substring(0, 6);
+                oui.command = ["grep", "-m", "1", "-E", "^" + prefix + "\\s+\\(base 16\\)", "/usr/share/hwdata/oui.txt"];
+                oui.running = true;
+            }
         }
     }
     Process {
@@ -181,6 +191,21 @@ Panel {
                 var name = Model.infoName(text, root.resolving);
                 if (name && root.devices[root.resolving]) root.devices[root.resolving].name = name;
                 root.refresh();
+            }
+        }
+    }
+    Process {
+        id: oui
+        environment: ({"LC_ALL":"C"})
+        stdout: StdioCollector {
+            onStreamFinished: {
+                // "788A20     (base 16)\t\tUbiquiti Inc"
+                var m = String(text).match(/[0-9A-F]{6}\s+\(base 16\)\s+(\S.*)/i);
+                if (m && root.vendorMac) {
+                    var next = Object.assign({}, root.vendors);
+                    next[root.vendorMac] = m[1].trim().slice(0, 60);
+                    root.vendors = next;
+                }
             }
         }
     }
@@ -284,7 +309,7 @@ Panel {
                                     LabelText { width: parent.width - Style.space(95); text: modelData.label; elide: Text.ElideRight; font.bold: true }
                                     LabelText { width: Style.space(95); text: modelData.status; horizontalAlignment: Text.AlignRight; font.pixelSize: Style.font.caption; color: modelData.status === "ONLINE" ? Color.accent : Color.muted }
                                 }
-                                LabelText { width: parent.width; text: modelData.ip + " · " + (modelData.mac || "MAC onbekend"); elide: Text.ElideRight; font.pixelSize: Style.font.caption }
+                                LabelText { width: parent.width; text: modelData.ip + (modelData.vendor ? " · " + modelData.vendor : "") + " · " + (modelData.mac || "MAC onbekend"); elide: Text.ElideRight; font.pixelSize: Style.font.caption; color: Color.muted }
                                 LabelText { text: "Eerst gezien " + root.wifiTime(modelData.first); color: Color.muted; font.pixelSize: Style.font.caption }
                                 LabelText { text: "Laatst bevestigd " + root.wifiTime(modelData.last); color: Color.muted; font.pixelSize: Style.font.caption }
                             }
@@ -314,7 +339,7 @@ Panel {
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         delegate: CursorSurface {
                             required property var modelData
-                            width: list.width; height: Style.space(modelData.named ? 68 : 54)
+                            width: list.width; height: Style.space(modelData.named || modelData.vendor ? 68 : 54)
                             hasCursor: root.cursorMac === modelData.mac
                             foreground: root.foreground
                             opacity: modelData.stale ? 0.55 : 1
@@ -325,7 +350,7 @@ Panel {
                                     LabelText { width: parent.width - Style.space(90); text: modelData.label; font.bold: modelData.named; elide: Text.ElideRight }
                                     LabelText { width: Style.space(90); text: root.dbm(modelData.rssi); color: root.signalColor(modelData.rssi); horizontalAlignment: Text.AlignRight }
                                 }
-                                LabelText { visible: modelData.named; text: modelData.mac; font.pixelSize: Style.font.caption; color: Color.muted }
+                                LabelText { visible: modelData.named || modelData.vendor; text: modelData.vendor ? (modelData.named ? modelData.vendor + " · " : "") + modelData.mac : modelData.mac; font.pixelSize: Style.font.caption; color: Color.muted }
                                 SignalBar { width: parent.width; value: modelData.average }
                             }
                             MouseArea {
