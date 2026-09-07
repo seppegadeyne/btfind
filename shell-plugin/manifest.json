@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "id": "btfind",
   "name": "Bluetooth Finder",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Seppe Gadeyne",
-  "description": "Open btfind to locate Bluetooth devices by signal strength",
+  "description": "Bluetooth signal monitor and local WiFi network presence",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "BtFind.qml"
   },
   "barWidget": {
     "displayName": "Bluetooth Finder",
-    "description": "Launch the btfind signal monitor in a floating terminal",
+    "description": "Native Bluetooth signal and WiFi presence panel",
     "category": "System",
     "defaultSection": "right",
     "allowMultiple": false

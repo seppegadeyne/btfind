@@ -15,6 +15,25 @@ Panel {
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
 
+    property bool wifiMode: false
+    property var wifiDevices: ({})
+    property var wifiRows: []
+    property string wifiMessage: ""
+    property string wifiNetwork: ""
+    property string wifiOutput: ""
+    function pollWifi(probe) {
+        if (!opened || !wifiMode || wifiScan.running) return;
+        wifiMessage = ""; wifiOutput = "";
+        wifiScan.command = ["python3", Qt.resolvedUrl("wifi-scan.py").toString().replace(/^file:\/\//, "")];
+        if (probe) wifiScan.command = wifiScan.command.concat(["--probe"]);
+        wifiScan.running = true;
+    }
+    function showWifi(value) {
+        wifiMode = value; selectedMac = "";
+        if (value) { stopScan(); pollWifi(false); }
+        else startScan();
+    }
+    function wifiTime(value) { return value === null ? "niet bevestigd" : Qt.formatDateTime(new Date(value), "HH:mm:ss"); }
     property var devices: ({})
     property var aliases: ({})
     property var rows: []
@@ -41,7 +60,7 @@ Panel {
         Model.update(devices, event, Date.now());
     }
     function startScan() {
-        if (!opened || stopping || scan.running) return;
+        if (!opened || wifiMode || stopping || scan.running) return;
         message = ""; scanning = true; scan.running = true;
     }
     function stopScan() {
@@ -53,7 +72,7 @@ Panel {
         stopTimeout.restart();
         resolveQueue = [];
     }
-    function toggleScan() { scanning ? stopScan() : startScan(); }
+    function toggleScan() { if (!wifiMode) scanning ? stopScan() : startScan(); }
     function selectDevice(mac) {
         if (!devices[mac]) return;
         selectedMac = mac; cursorMac = mac;
@@ -76,11 +95,30 @@ Panel {
     function dbm(value) { return value === null ? "—" : Math.round(value) + " dBm"; }
 
     onOpenedChanged: {
-        if (opened) { aliasFile.reload(); startScan(); }
+        if (opened) { aliasFile.reload(); if (wifiMode) pollWifi(false); else startScan(); }
         else stopScan();
     }
     Component.onDestruction: { if (scan.running) scan.write("scan off\nquit\n"); }
 
+    Timer {
+        interval: 20000; running: root.opened && root.wifiMode; repeat: true
+        onTriggered: root.pollWifi(false)
+    }
+    Process {
+        id: wifiScan
+        environment: ({"LC_ALL":"C", "PYTHONDONTWRITEBYTECODE":"1"})
+        stdout: StdioCollector { onStreamFinished: root.wifiOutput = text }
+        stderr: StdioCollector { onStreamFinished: { if (text.trim()) root.wifiMessage = text.trim().slice(-180); } }
+        onExited: function(code, status) {
+            var snapshot = code === 0 ? Model.parseWifi(root.wifiOutput) : null;
+            if (snapshot) {
+                Model.updateWifi(root.wifiDevices, snapshot, Date.now());
+                root.wifiNetwork = snapshot.networks.map(function(n) {return n.iface + " · " + n.network;}).join(" / ");
+                root.wifiMessage = snapshot.message;
+            } else root.wifiMessage = root.wifiMessage || "WiFi-meting mislukt; controleer python3, ip en iw.";
+            root.wifiRows = Model.wifiRows(root.wifiDevices, Date.now());
+        }
+    }
     FileView {
         id: aliasFile
         path: Quickshell.env("HOME") + "/.config/omarchy/plugins/btfind/aliases.json"
@@ -127,6 +165,7 @@ Panel {
         interval: 500; running: root.opened; repeat: true
         onTriggered: {
             root.refresh();
+            root.wifiRows = Model.wifiRows(root.wifiDevices, root.now);
             if (root.scanning && !info.running && root.resolveQueue.length) {
                 root.resolving = root.resolveQueue.shift();
                 info.command = ["bluetoothctl", "--timeout", "3", "info", root.resolving];
@@ -148,6 +187,9 @@ Panel {
     IpcHandler {
         target: "btfind"
         function open(): void { root.open(); }
+        function wifi(): void { root.open(); root.showWifi(true); }
+        function bluetooth(): void { root.showWifi(false); }
+        function probeWifi(): void { root.pollWifi(true); }
         function close(): void { root.close(); }
         function toggle(): void { root.toggle(); }
         function toggleScan(): void { root.toggleScan(); }
@@ -156,6 +198,7 @@ Panel {
         function rename(mac: string, name: string): bool { return root.saveAlias(mac.toUpperCase(), name); }
         function status(): string {
             return JSON.stringify({opened:root.opened, scanning:root.scanning, processRunning:scan.running,
+                wifiMode:root.wifiMode, wifiRunning:wifiScan.running, wifiMessage:root.wifiMessage, wifiNetwork:root.wifiNetwork, wifiDevices:root.wifiRows,
                 deviceCount:root.rows.length, signalCount:root.rows.filter(function(d) {return d.rssi !== null;}).length,
                 selected:root.selected, aliasReady:root.aliasReady, message:root.message,
                 devices:root.rows.map(function(d) {return {mac:d.mac,name:d.label,rssi:d.rssi,average:d.average};})});
@@ -168,7 +211,7 @@ Panel {
         text: "󰧿"
         slotSize: Style.bar.statusSlot
         fontSize: Style.font.caption
-        tooltipText: "Bluetooth Finder — live signaalmonitor"
+        tooltipText: "Bluetooth Finder — Bluetooth-signaal en WiFi-aanwezigheid"
         onPressed: root.toggle()
     }
     KeyboardPanel {
@@ -183,8 +226,8 @@ Panel {
         PanelKeyCatcher {
             id: keys
             anchors.fill: parent
-            onMoveRequested: function(dx, dy) { if (!root.selectedMac && dy) root.moveCursor(dy); }
-            onActivateRequested: { if (!root.selectedMac) root.selectDevice(root.cursorMac); }
+            onMoveRequested: function(dx, dy) { if (!root.wifiMode && !root.selectedMac && dy) root.moveCursor(dy); }
+            onActivateRequested: { if (!root.wifiMode && !root.selectedMac) root.selectDevice(root.cursorMac); }
             onCloseRequested: { if (root.selectedMac) root.selectedMac = ""; else root.close(); }
             onTabRequested: function(direction) { root.switchPanel(direction); }
             onTextKey: function(text) { if (text === " ") root.toggleScan(); if (text === "b") root.selectedMac = ""; }
@@ -195,26 +238,68 @@ Panel {
                     width: parent.width; height: Style.space(44)
                     Column {
                         width: parent.width - scanToggle.width - Style.space(12)
-                        LabelText { text: "Bluetooth Finder"; font.pixelSize: Style.font.title; font.bold: true }
-                        LabelText { text: root.scanning ? "LIVE · " + root.rows.length + " APPARATEN" : "SCAN GEPAUZEERD"; font.pixelSize: Style.font.caption; color: Color.muted }
+                        LabelText { text: root.wifiMode ? "WiFi-netwerk" : "Bluetooth Finder"; font.pixelSize: Style.font.title; font.bold: true }
+                        LabelText { text: root.wifiMode ? (wifiScan.running ? "METING BEZIG…" : root.wifiRows.length + " APPARATEN · 20 S") : root.scanning ? "LIVE · " + root.rows.length + " APPARATEN" : "SCAN GEPAUZEERD"; font.pixelSize: Style.font.caption; color: Color.muted }
                     }
                     ToggleSwitch {
                         id: scanToggle
+                        visible: !root.wifiMode
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         checked: root.scanning; foreground: root.foreground
                         onToggled: root.toggleScan()
                     }
                 }
+                Row {
+                    spacing: Style.space(8)
+                    ActionButton { text: "Bluetooth"; enabled: root.wifiMode; onClicked: root.showWifi(false) }
+                    ActionButton { text: "WiFi"; enabled: !root.wifiMode; onClicked: root.showWifi(true) }
+                    ActionButton { text: "Scan subnet"; visible: root.wifiMode; enabled: !wifiScan.running; onClicked: root.pollWifi(true) }
+                }
                 PanelSeparator { foreground: root.foreground }
+                Column {
+                    visible: root.wifiMode
+                    width: parent.width; spacing: Style.space(4)
+                    LabelText { width: parent.width; text: root.wifiNetwork; elide: Text.ElideRight; font.pixelSize: Style.font.caption }
+                    LabelText { text: "Aanwezigheid, geen afstand · ook bekabelde apparaten"; font.pixelSize: Style.font.caption; color: Color.muted }
+                    LabelText { width: parent.width; text: root.wifiMessage; visible: text !== ""; wrapMode: Text.Wrap; font.pixelSize: Style.font.caption }
+                }
+                Item {
+                    visible: root.wifiMode
+                    width: parent.width; height: Math.max(0, parent.height - y)
+                    LabelText { width: parent.width; visible: !root.wifiRows.length; wrapMode: Text.Wrap; text: "Nog geen apparaten. Scan subnet zoekt extra IPv4-buren (alleen op een netwerk dat je mag scannen)." }
+                    ListView {
+                        id: wifiList
+                        anchors.fill: parent; clip: true; model: root.wifiRows
+                        spacing: Style.space(4)
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        delegate: CursorSurface {
+                            required property var modelData
+                            width: wifiList.width; height: Style.space(94)
+                            foreground: root.foreground
+                            Column {
+                                anchors.fill: parent; anchors.margins: Style.space(8); spacing: Style.space(3)
+                                Row {
+                                    width: parent.width
+                                    LabelText { width: parent.width - Style.space(95); text: modelData.label; elide: Text.ElideRight; font.bold: true }
+                                    LabelText { width: Style.space(95); text: modelData.status; horizontalAlignment: Text.AlignRight; font.pixelSize: Style.font.caption; color: modelData.status === "ONLINE" ? Color.accent : Color.muted }
+                                }
+                                LabelText { width: parent.width; text: modelData.ip + " · " + (modelData.mac || "MAC onbekend"); elide: Text.ElideRight; font.pixelSize: Style.font.caption }
+                                LabelText { text: "Eerst gezien " + root.wifiTime(modelData.first); color: Color.muted; font.pixelSize: Style.font.caption }
+                                LabelText { text: "Laatst bevestigd " + root.wifiTime(modelData.last); color: Color.muted; font.pixelSize: Style.font.caption }
+                            }
+                        }
+                    }
+                }
                 LabelText {
-                    visible: root.message !== ""
+                    visible: !root.wifiMode && root.message !== ""
                     width: parent.width; text: root.message; wrapMode: Text.Wrap
                     color: Color.urgent; font.pixelSize: Style.font.caption
                 }
                 Item {
                     width: parent.width
                     height: Math.max(0, parent.height - y)
-                    visible: !root.selectedMac
+                    visible: !root.wifiMode && !root.selectedMac
                     LabelText {
                         visible: root.rows.length === 0; width: parent.width
                         text: root.scanning ? "Luisteren naar apparaten…\nZet Bluetooth op de gekoppelde telefoon uit als je horloge niet verschijnt." : "Zet de scan aan om apparaten te zoeken."
@@ -252,7 +337,7 @@ Panel {
                     }
                 }
                 Column {
-                    visible: !!root.selectedMac
+                    visible: !root.wifiMode && !!root.selectedMac
                     width: parent.width; spacing: Style.space(10)
                     ActionButton { text: "‹ Apparaten"; onClicked: root.selectedMac = "" }
                     LabelText { width: parent.width; text: root.selected ? root.selected.label : ""; elide: Text.ElideRight; font.bold: true; font.pixelSize: Style.font.title }

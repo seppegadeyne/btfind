@@ -1,4 +1,64 @@
 // Plain JavaScript: shared by QML and the dependency-free Node tests.
+function wifiAddress(ip) {
+    var p = String(ip).split('.');
+    if (p.length !== 4 || p.some(function(v) { return !/^\d{1,3}$/.test(v) || Number(v) > 255; })) return null;
+    return p.reduce(function(n,v) { return n * 256 + Number(v); }, 0);
+}
+function wifiContains(cidr, ip) {
+    var p = String(cidr).split('/'), a = wifiAddress(p[0]), b = wifiAddress(ip), bits = Number(p[1]);
+    if (p.length !== 2 || a === null || b === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+    var size = Math.pow(2, 32-bits);
+    return Math.floor(a/size) === Math.floor(b/size);
+}
+function parseWifi(raw) {
+    var s;
+    try { s = JSON.parse(raw); } catch (e) { return null; }
+    if (!s || !Array.isArray(s.networks) || !Array.isArray(s.neighbors)) return null;
+    var found = {}, names = s.names || {};
+    function networkFor(iface, ip) {
+        return s.networks.find(function(n) { return n.iface === iface && wifiContains(n.cidr, ip) && n.cidr.split('/')[0] !== ip; });
+    }
+    s.neighbors.forEach(function(n) {
+        var net = networkFor(n.dev, n.dst);
+        if (!net || !/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(n.lladdr || '')) return;
+        var state = Array.isArray(n.state) ? n.state : [n.state];
+        found[n.dev+'|'+n.dst] = {key:net.identity+'|'+n.lladdr.toUpperCase(), network:net.identity,
+            iface:n.dev, ip:n.dst, mac:n.lladdr.toUpperCase(), name:names[n.dst] || '',
+            online:state.indexOf('REACHABLE') >= 0 ? true : state.indexOf('FAILED') >= 0 ? false : null};
+    });
+    String(s.mdns || '').split('\n').forEach(function(line) {
+        var p = line.split(';');
+        if (p[0] !== '=' || p.length < 9) return;
+        var net = networkFor(p[1], p[7]);
+        if (!net) return;
+        var key = p[1]+'|'+p[7], d = found[key];
+        if (!d) d = found[key] = {key:net.identity+'|'+p[7], network:net.identity, iface:p[1], ip:p[7], mac:'', name:'', online:null};
+        if (!d.name) d.name = p[6].replace(/\\(\d{3})/g, function(_,v) { return String.fromCharCode(Number(v)); }).slice(0,120);
+    });
+    return {devices:Object.keys(found).map(function(k) {return found[k];}), networks:s.networks, message:String(s.message || '')};
+}
+function updateWifi(store, snapshot, now) {
+    var active = snapshot.networks.map(function(n) {return n.identity;});
+    Object.keys(store).forEach(function(k) {
+        if (active.indexOf(store[k].network) < 0 || now-store[k].observed > 1800000) delete store[k];
+        else store[k].online = null;
+    });
+    snapshot.devices.forEach(function(d) {
+        var old = store[d.key];
+        // Upgrade an mDNS-only address once ARP supplies its MAC.
+        var provisional = d.network+'|'+d.ip;
+        if (!old && d.mac && store[provisional]) {old = store[provisional]; delete store[provisional];}
+        store[d.key] = Object.assign({}, d, {name:d.name || (old ? old.name : ''),
+            first:old ? old.first : now, last:d.online === true ? now : old ? old.last : null, observed:now});
+    });
+}
+function wifiRows(store, now) {
+    return Object.keys(store).map(function(k) {
+        var d = store[k], expired = now-(d.last === null ? d.first : d.last) > 90000;
+        return Object.assign({}, d, {label:d.name || d.ip,
+            status:d.online === true && !expired ? 'ONLINE' : d.online === false || expired ? 'OFFLINE?' : 'ONBEKEND'});
+    }).sort(function(a,b) {return (b.status === 'ONLINE')-(a.status === 'ONLINE') || a.label.localeCompare(b.label);});
+}
 function update(devices, event, now) {
     var d = devices[event.mac];
     if (!d) d = devices[event.mac] = {mac:event.mac, name:'', samples:[], ema:null, last:0, rssi:null};

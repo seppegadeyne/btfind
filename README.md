@@ -67,7 +67,7 @@ alleen de onderstaande topbar-plugin vereist Omarchy met Quickshell.
 
 ```sh
 mkdir -p ~/.config/omarchy/plugins/btfind
-cp ~/Projects/btfind/shell-plugin/{manifest.json,BtFind.qml,Model.js} \
+cp ~/Projects/btfind/shell-plugin/{manifest.json,BtFind.qml,Model.js,wifi-scan.py} \
   ~/.config/omarchy/plugins/btfind/
 ```
 
@@ -98,7 +98,7 @@ adapterinstellingen. Onbekende apparaten krijgen een compacte naam
 opgelost en kun je zelf een alias geven (Enter op een apparaat), bewaard in
 `~/.config/omarchy/plugins/btfind/aliases.json`. Het icoon gebruikt dezelfde
 Nerd Font-glyph als Omarchy's Bluetooth-paneel. Er is geen extra service of
-Waybar nodig. Plugin-updates installeren: kopieer de drie pluginbestanden
+Waybar nodig. Plugin-updates installeren: kopieer de vier pluginbestanden
 opnieuw en herstart de shell.
 
 De persoonlijke `shell.json` blijft lokaal en hoort niet in deze repository.
@@ -110,6 +110,73 @@ rm -f ~/.local/share/applications/btfind.desktop
 
 Verwijder voor het uitschakelen van de topbar-knop alleen de `btfind`-entry uit
 `bar.layout.right` en voer `omarchy-restart-shell` uit.
+
+## WiFi-apparaten in het paneel
+
+Klik **WiFi** voor IPv4-apparaten in hetzelfde subnet als de verbonden
+WiFi-interface. Dit is **netwerkaanwezigheid, geen afstandsmeter** en geen
+volledige router-clientlijst: ook bekabelde apparaten kunnen verschijnen.
+
+- Elke **20 seconden**, uitsluitend zolang het WiFi-paneel open is: `ip -j -4
+  neigh` (ARP-cache), optioneel `avahi-browse -artp` (mDNS/DNS-SD) en begrensde
+  `getent hosts`-resolutie (NSS, bijvoorbeeld reverse-DNS/DHCP-hostnames).
+  Normaal worden geen subnetpings gestuurd; mDNS/DNS-resolutie kan wel
+  netwerkverkeer veroorzaken. ARP zelf bevat geen hostnames.
+- **Scan subnet** is expliciet opt-in: één ping per adres op direct verbonden
+  IPv4-subnetten van maximaal 256 adressen, maximaal 254 doelen totaal,
+  16 gelijktijdige processen met time-outs. Geen poortscan. Een ping veroorzaakt
+  normale ARP-resolutie; een apparaat kan daardoor zichtbaar worden zelfs als
+  het ICMP blokkeert. Gebruik dit alleen op netwerken die je mag scannen.
+- Namen, IPv4-adres, MAC (of **MAC onbekend** bij alleen mDNS), eerste waarneming
+  en laatste bevestiging worden getoond. **ONLINE** betekent dat de kernel de
+  buur als `REACHABLE` kent, niet dat we het apparaat fysiek dichtbij meten.
+  **ONBEKEND** is een onbevestigde cache/mDNS-vermelding (`STALE`, `DELAY`,
+  `PROBE`, statische ARP). **OFFLINE?** betekent `FAILED` of meer dan 90 seconden
+  zonder bevestiging; slaapstand, client-isolatie en filtering kunnen dezelfde
+  uitkomst geven. Het vraagteken is bewust: afwezigheid is geen bewijs.
+- `Laatst bevestigd` verandert niet door alleen een oude ARP/mDNS-vermelding.
+  De kernel bepaalt hoe lang `REACHABLE` geldig blijft; tijden zijn lokale
+  observaties, geen exacte verbindings- of pakket-tijdstempels.
+- Geschiedenis is alleen in het geheugen, wordt bij een andere AP/subnet-context
+  gewist en verdwijnt bij een shell-herstart. Dertig minuten niet meer in een
+  snapshot waargenomen apparaten worden verwijderd. Roaming naar een andere
+  BSSID start conservatief een nieuwe lijst. Een lopende meting mag bij sluiten
+  nog afronden; daarna start geen nieuwe poll. Er loopt maximaal één meting.
+
+Vereisten: `python3` (stdlib), `ip` (iproute2), `iw`; optioneel Avahi voor mDNS,
+`getent` voor namen en `ping` (iputils) voor de subnetknop. Geen root, extra
+Python/Node-packages, daemon of adapterinstellingen nodig. De plugin gebruikt
+geen `nmcli` en werkt onafhankelijk van NetworkManager/systemd-networkd.
+IPv6-only apparaten en andere VLANs/subnetten vallen buiten deze eerste versie.
+
+### Waarom geen WiFi-afstand?
+
+Een gewone managed WiFi-client ontvangt geen bruikbare RSSI-metingen van alle
+andere clients via ARP/ping/mDNS. `iw dev <interface> station dump` kan in
+clientmodus **wel** werken, maar toont normaal alleen het verbonden accesspoint;
+die signaalsterkte zegt niets over de afstand tot een telefoon. In AP-modus ziet
+het AP zijn eigen aangesloten stations. Router/AP-telemetrie kan eventueel
+client-RSSI leveren (afstand tot het **AP**, niet tot deze laptop).
+Monitor-mode/raw ARP-scans (`arp-scan`, privileged nmap discovery) vragen
+extra privileges en/of adapterwijzigingen en zijn bewust niet geïmplementeerd.
+Unprivileged nmap kan TCP-connect-discovery gebruiken, maar is hier niet nodig.
+Ping-latentie wordt nooit als afstand gebruikt. Slapende telefoons, private
+MAC-adressen en AP-client-isolatie kunnen detectie beperken.
+
+### Tests en diagnose
+
+```sh
+node --test tests/*.test.cjs
+python3 shell-plugin/wifi-scan.py          # alleen verzamelen/resolutie
+python3 shell-plugin/wifi-scan.py --probe  # expliciete subnetpings
+omarchy-shell btfind wifi
+omarchy-shell btfind status
+omarchy-shell btfind close
+```
+
+Parsing, samenvoegen en historie zitten in `Model.js`; `wifi-scan.py` verzamelt
+begrensd systeeminformatie en voert de optionele probes uit. De Node-tests
+vereisen alleen Node zelf; de collector-test gebruikt daarnaast Python stdlib.
 
 ## Tips bij zoeken
 
