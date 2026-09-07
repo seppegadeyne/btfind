@@ -165,7 +165,7 @@ Panel {
         id: button
         anchors.fill: parent
         bar: root.bar
-        text: "󰂯"
+        text: "󰡍"
         slotSize: Style.bar.statusSlot
         fontSize: Style.font.caption
         tooltipText: "Bluetooth Finder — live signaalmonitor"
