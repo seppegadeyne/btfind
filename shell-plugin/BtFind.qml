@@ -38,7 +38,11 @@ Panel {
     property var aliases: ({})
     property var rows: []
     property var resolveQueue: []
-    property string resolving: ""
+    property var resolving: []
+    property int infoBatches: 0
+    property int infoResolved: 0
+    property int ouiLookups: 0
+    property int ouiLastExit: -1
     property var vendorQueue: []
     property string vendorMac: ""
     property var vendors: ({})
@@ -59,12 +63,13 @@ Panel {
         if (/Failed|No default controller|not available|NotReady|NotPowered/i.test(plain)) message = plain.slice(-180);
         var event = Model.parseLine(line);
         if (!event || event.removed) return;
-        if (!devices[event.mac]) { resolveQueue.push(event.mac); vendorQueue.push(event.mac); }
+        if (!devices[event.mac]) resolveQueue.push(event.mac);
         Model.update(devices, event, Date.now());
     }
     function startScan() {
         if (!opened || wifiMode || stopping || scan.running) return;
         message = ""; scanning = true; scan.running = true;
+        resolveQueue = Object.keys(devices);
     }
     function stopScan() {
         scanning = false;
@@ -74,7 +79,7 @@ Panel {
         scan.write("scan off\nquit\n");
         stopTimeout.restart();
         resolveQueue = [];
-        vendorQueue = [];
+        // Keep pending public-address lookups for the next scan.
     }
     function toggleScan() { if (!wifiMode) scanning ? stopScan() : startScan(); }
     function selectDevice(mac) {
@@ -169,16 +174,22 @@ Panel {
         interval: 500; running: root.opened; repeat: true
         onTriggered: {
             root.refresh();
+            if (root.scanning) Object.keys(root.devices).forEach(function(mac) {
+                var d = root.devices[mac];
+                if (root.now - d.last < 15000 && root.now - (d.infoAt || 0) >= 30000 && root.resolveQueue.indexOf(mac) < 0) root.resolveQueue.push(mac);
+            });
             root.wifiRows = Model.wifiRows(root.wifiDevices, root.now);
             if (root.scanning && !info.running && root.resolveQueue.length) {
-                root.resolving = root.resolveQueue.shift();
-                info.command = ["bluetoothctl", "--timeout", "3", "info", root.resolving];
+                root.resolving = root.resolveQueue.splice(0, 16);
+                root.resolving.forEach(function(mac) { root.devices[mac].infoAt = Date.now(); });
+                info.command = ["bluetoothctl", "--timeout", "5"];
                 info.running = true;
             }
-            if (root.opened && !oui.running && root.vendorQueue.length) {
+            if (root.scanning && !oui.running && root.vendorQueue.length) {
                 root.vendorMac = root.vendorQueue.shift();
                 var prefix = root.vendorMac.replace(/:/g, "").substring(0, 6);
                 oui.command = ["grep", "-m", "1", "-E", "^" + prefix + "\\s+\\(base 16\\)", "/usr/share/hwdata/oui.txt"];
+                root.ouiLookups++;
                 oui.running = true;
             }
         }
@@ -186,16 +197,32 @@ Panel {
     Process {
         id: info
         environment: ({"LC_ALL":"C"})
+        stdinEnabled: true
+        onStarted: {
+            root.infoBatches++;
+            write(root.resolving.map(function(mac) { return "info " + mac; }).join("\n") + "\nquit\n");
+        }
+        stderr: StdioCollector { onStreamFinished: { if (text.trim()) root.message = Model.clean(text).slice(-180); } }
         stdout: StdioCollector {
             onStreamFinished: {
-                var name = Model.infoName(text, root.resolving);
-                if (name && root.devices[root.resolving]) root.devices[root.resolving].name = name;
+                var batch = Model.parseInfoBatch(text);
+                Object.keys(batch).forEach(function(mac) {
+                    var d = root.devices[mac];
+                    if (!d) return;
+                    d.metadata = batch[mac];
+                    if (batch[mac].name) d.name = batch[mac].name;
+                    root.infoResolved++;
+                    if (d.metadata.addressType === "public" && !d.ouiChecked) {
+                        d.ouiChecked = true; root.vendorQueue.push(mac);
+                    }
+                });
                 root.refresh();
             }
         }
     }
     Process {
         id: oui
+        onExited: function(code, status) { root.ouiLastExit = code; }
         environment: ({"LC_ALL":"C"})
         stdout: StdioCollector {
             onStreamFinished: {
@@ -226,7 +253,9 @@ Panel {
                 wifiMode:root.wifiMode, wifiRunning:wifiScan.running, wifiMessage:root.wifiMessage, wifiNetwork:root.wifiNetwork, wifiDevices:root.wifiRows,
                 deviceCount:root.rows.length, signalCount:root.rows.filter(function(d) {return d.rssi !== null;}).length,
                 selected:root.selected, aliasReady:root.aliasReady, message:root.message,
-                devices:root.rows.map(function(d) {return {mac:d.mac,name:d.label,rssi:d.rssi,average:d.average};})});
+                infoBatches:root.infoBatches, infoResolved:root.infoResolved, infoRunning:info.running, resolvePending:root.resolveQueue.length,
+                ouiLookups:root.ouiLookups, ouiLastExit:root.ouiLastExit, ouiRunning:oui.running, vendorPending:root.vendorQueue.length,
+                devices:root.rows.map(function(d) {return {mac:d.mac,name:d.label,subtitle:d.subtitle,metadata:d.metadata,rssi:d.rssi,average:d.average};})});
         }
     }
     BarIconButton {
@@ -339,7 +368,7 @@ Panel {
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                         delegate: CursorSurface {
                             required property var modelData
-                            width: list.width; height: Style.space(modelData.named || modelData.vendor ? 68 : 54)
+                            width: list.width; height: Style.space(68)
                             hasCursor: root.cursorMac === modelData.mac
                             foreground: root.foreground
                             opacity: modelData.stale ? 0.55 : 1
@@ -350,7 +379,7 @@ Panel {
                                     LabelText { width: parent.width - Style.space(90); text: modelData.label; font.bold: modelData.named; elide: Text.ElideRight }
                                     LabelText { width: Style.space(90); text: root.dbm(modelData.rssi); color: root.signalColor(modelData.rssi); horizontalAlignment: Text.AlignRight }
                                 }
-                                LabelText { visible: modelData.named || modelData.vendor; text: modelData.vendor ? (modelData.named ? modelData.vendor + " · " : "") + modelData.mac : modelData.mac; font.pixelSize: Style.font.caption; color: Color.muted }
+                                LabelText { width: parent.width; elide: Text.ElideRight; text: modelData.subtitle; font.pixelSize: Style.font.caption; color: Color.muted }
                                 SignalBar { width: parent.width; value: modelData.average }
                             }
                             MouseArea {
@@ -366,7 +395,7 @@ Panel {
                     width: parent.width; spacing: Style.space(10)
                     ActionButton { text: "‹ Apparaten"; onClicked: root.selectedMac = "" }
                     LabelText { width: parent.width; text: root.selected ? root.selected.label : ""; elide: Text.ElideRight; font.bold: true; font.pixelSize: Style.font.title }
-                    LabelText { text: root.selectedMac; color: Color.muted; font.pixelSize: Style.font.caption }
+                    LabelText { width: parent.width; wrapMode: Text.Wrap; text: root.selected ? root.selected.subtitle : root.selectedMac; color: Color.muted; font.pixelSize: Style.font.caption }
                     LabelText {
                         text: root.selected ? root.dbm(root.selected.ema) : "—"
                         font.pixelSize: Style.font.display

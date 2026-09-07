@@ -1,0 +1,32 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const M = {};
+vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../shell-plugin/Model.js'), 'utf8'), M);
+test('appearance and modalias preserve namespaces; service is not a product brand', () => {
+  const mac = '44:44:44:0C:BC:DB';
+  const parse = body => M.parseInfoBatch(`Device ${mac} (random)\n${body}`)[mac];
+  assert.equal(parse('\tAppearance: 0x0940\n').type, 'Draagbaar audioapparaat');
+  assert.equal(parse('\tAppearance: 0x0943\n').type, 'Koptelefoon');
+  assert.equal(parse('\tModalias: bluetooth:v009Ep0001d0001\n').company, 'Bose Corporation');
+  assert.equal(parse('\tModalias: usb:v009Ep0001d0001\n').company, '');
+  assert.equal(parse('\tManufacturerData.Key: 0xffff (65535)\n').company, '');
+  assert.equal(parse('\tUUID: Google (0000fe9f-0000-1000-8000-00805f9b34fb)\n').service, 'Google');
+  assert.equal(parse('\tUUID: Unknown (abcdfe9f-1111-2222-3333-00805f9b34fb)\n').service, '');
+  const devices = {}; M.update(devices,{mac,rssi:-60},1);
+  devices[mac].metadata = parse('\tAppearance: 0x0943\n');
+  assert.equal(M.rows(devices,{},1)[0].label, 'Koptelefoon (onbekend merk) · BC:DB');
+});
+test('batch info uses advertised company data even on random addresses', () => {
+  const raw = '[bluetoothctl]> info 44:44:44:0C:BC:DB\nDevice 44:44:44:0C:BC:DB (random)\n\tAlias: 44-44-44-0C-BC-DB\n\tManufacturerData.Key: 0x00e0 (224)\n[bluetoothctl]> info C8:27:8B:1F:9E:7A\nDevice C8:27:8B:1F:9E:7A (random)\n\tManufacturerData.Key: 0x004c (76)\n';
+  const metadata = M.parseInfoBatch(raw);
+  const mac = '44:44:44:0C:BC:DB', devices = {};
+  M.update(devices, {mac, rssi:-60}, 1000);
+  devices[mac].metadata = metadata[mac];
+  assert.equal(metadata[mac].addressType, 'random');
+  assert.equal(metadata['C8:27:8B:1F:9E:7A'].company, 'Apple, Inc.');
+  assert.equal(M.rows(devices, {}, 1000, {[mac]:'Wrong OUI'})[0].label, 'Google · BC:DB');
+  assert.match(M.rows(devices, {}, 1000)[0].subtitle, /ManufacturerData.*random/);
+  assert.equal(M.rows(devices, {[mac]:'Mijn apparaat'}, 1000)[0].label, 'Mijn apparaat');
+});

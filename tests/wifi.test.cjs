@@ -43,8 +43,9 @@ test('WiFi and BT labels fall back to OUI vendor when hostname is unknown', () =
  assert.equal(row.label, 'Ubiquiti Inc · 10.0.0.1');
  const devices = {};
  model.update(devices, {mac:'AA:BB:CC:DD:EE:FF', name:'', rssi:-60}, 1000);
+ devices['AA:BB:CC:DD:EE:FF'].metadata = {addressType:'public'};
  const bt = model.rows(devices, {}, 2000, {'AA:BB:CC:DD:EE:FF':'Apple, Inc.'})[0];
- assert.equal(bt.label, 'Apple, Inc.');
+ assert.equal(bt.label, 'Apple, Inc. · EE:FF');
  assert.equal(bt.named, false);
  assert.equal(bt.vendor, 'Apple, Inc.');
 });

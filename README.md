@@ -93,13 +93,15 @@ kleurgecodeerde sterktebalken en trend (▲ sterker / ▼ zwakker / ◆ stabiel)
 Enter opent de signaalmonitor met geschiedenis-graaf (laatste 90 s); loop door
 het huis en volg de trend, net als in de TUI. Scannen start alleen zolang het
 paneel open is en stopt automatisch bij sluiten; de plugin verandert zelf geen
-adapterinstellingen. Onbekende apparaten krijgen een compacte naam
-(`•` + laatste 5 tekens van het MAC); via `bluetoothctl info` worden namen
-opgelost en kun je zelf een alias geven (Enter op een apparaat), bewaard in
+adapterinstellingen. Namen worden via `bluetoothctl info` opgehaald in batches
+van maximaal 16 apparaten, één proces tegelijk, met 5 s time-out. Recente
+apparaten worden na 30 s opnieuw bekeken (advertenties kunnen later meer
+informatie bevatten). Je kunt zelf een alias geven (Enter op een apparaat), bewaard in
 `~/.config/omarchy/plugins/btfind/aliases.json`. Het icoon gebruikt dezelfde
 Nerd Font-glyph als Omarchy's Bluetooth-paneel. Er is geen extra service of
 Waybar nodig. Plugin-updates installeren: kopieer de vier pluginbestanden
-opnieuw en herstart de shell.
+opnieuw en **DIRECT `omarchy-restart-shell` uitvoeren**, nooit op hot-reload
+vertrouwen (Quickshell #962: een latere lock kan anders crashen).
 
 De persoonlijke `shell.json` blijft lokaal en hoort niet in deze repository.
 Een eventuele oudere launcher-entry kun je verwijderen:
@@ -110,6 +112,37 @@ rm -f ~/.local/share/applications/btfind.desktop
 
 Verwijder voor het uitschakelen van de topbar-knop alleen de `btfind`-entry uit
 `bar.layout.right` en voer `omarchy-restart-shell` uit.
+
+## Bluetooth-namen en beperkingen
+
+Prioriteit: eigen alias → BlueZ-naam → geadverteerd type/company-id →
+service-eigenaar → `Onbekend BLE-apparaat`. Fallbacks behouden het MAC-fragment
+om gelijknamige apparaten te onderscheiden; de subtitel vermeldt bron en adrestype.
+Een company-id bewijst geen productmodel of merk: `Google-service` betekent
+alleen dat de service-UUID aan Google is toegewezen. Geen type raden uit RSSI
+of fabrikant. `Appearance 0x0940` is draagbare audio, **0x0943** is koptelefoon.
+
+`ManufacturerData.Key` en `bluetooth:v...` Modalias gebruiken Bluetooth SIG
+company-ids (compacte subset: Microsoft, Apple, Samsung, Bose, Google).
+`usb:v...` heeft een andere namespace en wordt niet als SIG-id geïnterpreteerd.
+Bronnen: [SIG company identifiers](https://bitbucket.org/bluetooth-SIG/public/src/main/assigned_numbers/company_identifiers/company_identifiers.yaml)
+en [Appearance](https://bitbucket.org/bluetooth-SIG/public/src/main/assigned_numbers/core/appearance_values.yaml).
+Geen extra database-downloads tijdens scannen.
+
+Veel BLE-adressen zijn random: gebruik BlueZ `(random)`, **niet** het Ethernet
+local-admin-bit `0x02` om dat vast te stellen. Zelfs een toevallige IEEE-prefixmatch
+is dan geen fabrikantbewijs. Bij random adressen geven de bovenste twee bits
+`11` static, `01` resolvable-private, `00` non-resolvable-private aan; zonder
+BlueZ-adrestype is die classificatie niet betrouwbaar.
+
+Diagnose: `omarchy-shell btfind open` en daarna `omarchy-shell btfind bluetooth`
+(`open bluetooth` is geen geldige IPC-signatuur). `status` toont metadata,
+lookup-tellers en wachtrijen. OUI-grep zelf werkt; in de onderzochte lijst
+ontbraken alle prefixes. BC:DB/E4:94 hadden Google ManufacturerData 0x00e0,
+4C:51/9E:7A Apple 0x004c, F7:C1/46:64 geen naam/type/company-data.
+Alle zes werden door BlueZ als random gemeld, ook BC:DB/46:64/9E:7A zonder
+local-admin-bit. Zonder extra advertenties of eigen alias blijven de laatste
+twee eerlijk onbekend.
 
 ## WiFi-apparaten in het paneel
 
@@ -130,7 +163,8 @@ volledige router-clientlijst: ook bekabelde apparaten kunnen verschijnen.
 - Namen, IPv4-adres, MAC (of **MAC onbekend** bij alleen mDNS), eerste waarneming
   en laatste bevestiging worden getoond. Apparaten zonder hostname krijgen de
   fabrikantnaam uit de IEEE OUI-database (`/usr/share/hwdata/oui.txt`) als
-  label, ook bij Bluetooth. **ONLINE** betekent dat de kernel de
+  label. Bluetooth gebruikt OUI uitsluitend voor door BlueZ bevestigde publieke
+  adressen. **ONLINE** betekent dat de kernel de
   buur als `REACHABLE` kent, niet dat we het apparaat fysiek dichtbij meten.
   **ONBEKEND** is een onbevestigde cache/mDNS-vermelding (`STALE`, `DELAY`,
   `PROBE`, statische ARP). **OFFLINE?** betekent `FAILED` of meer dan 90 seconden

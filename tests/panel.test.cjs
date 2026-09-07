@@ -12,6 +12,15 @@ test('WiFi panel has bounded polling, explicit probe, presence-only UI and IPC',
  assert.match(qml, /Scan subnet/);
  assert.match(qml, /geen afstand/);
 });
+test('Bluetooth metadata is bounded, batched, retried and exposed for diagnosis', () => {
+ const qml = fs.readFileSync(path.join(__dirname,'../shell-plugin/BtFind.qml'),'utf8');
+ assert.match(qml, /resolveQueue\.splice\(0, 16\)/);
+ assert.match(qml, /Model\.parseInfoBatch/);
+ assert.match(qml, /infoBatches/);
+ assert.match(qml, /metadata\.addressType === "public"/);
+ assert.match(qml, /30000/);
+ assert.match(qml, /modelData\.subtitle/);
+});
 test('plugin exposes native coordinated panel, not a terminal launcher', () => {
  const qml = fs.readFileSync(path.join(__dirname,'../shell-plugin/BtFind.qml'),'utf8');
  assert.match(qml, /KeyboardPanel\s*\{/);

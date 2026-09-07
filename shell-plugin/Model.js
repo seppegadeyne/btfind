@@ -79,13 +79,66 @@ function rows(devices, aliases, now, vendors) {
         var trend = history.filter(function(s) { return now - s.t <= 10000; });
         var delta = trend.length > 1 ? d.ema - trend[0].ema : 0;
         var name = aliases[mac] || d.name;
-        var vendor = vendors[mac] || '';
-        return {mac:mac, label:name || vendor || '• ' + mac.slice(-5), named:!!name, vendor:vendor,
+        var meta = d.metadata || {};
+        var vendor = meta.company || (meta.addressType === 'public' ? vendors[mac] || '' : '');
+        var fallback = meta.type ? meta.type + (vendor ? ' · ' + vendor : ' (onbekend merk)') : vendor || (meta.service ? meta.service + '-service' : 'Onbekend BLE-apparaat');
+        var subtitle = [meta.evidence || (vendor ? 'IEEE OUI' : ''), meta.addressType || 'adrestype onbekend', mac].filter(Boolean).join(' · ');
+        return {mac:mac, label:name || fallback + ' · ' + mac.slice(-5), named:!!name, vendor:vendor,
+            subtitle:subtitle, metadata:meta,
             rssi:d.rssi, ema:d.ema, last:d.last, history:history,
             stale:!d.last || now - d.last > 5000,
             average:recent.length ? recent.reduce(function(n,s) {return n+s.r;},0)/recent.length : null,
             trend:delta > 2 ? '▲ sterker' : delta < -2 ? '▼ zwakker' : '◆ stabiel'};
     }).sort(function(a,b) { return (b.average === null ? -999 : b.average) - (a.average === null ? -999 : a.average) || a.mac.localeCompare(b.mac); });
+}
+// Compact Bluetooth SIG company identifiers subset, verified against:
+// https://bitbucket.org/bluetooth-SIG/public/src/main/assigned_numbers/company_identifiers/company_identifiers.yaml
+// ManufacturerData identifies the advertised namespace, not a proven product brand.
+var companies = {6:'Microsoft', 76:'Apple, Inc.', 117:'Samsung Electronics Co. Ltd.', 158:'Bose Corporation', 224:'Google'};
+function parseInfoBatch(raw) {
+    var result = {}, mac = '', body = '';
+    function flush() {
+        if (!mac) return;
+        var meta = result[mac];
+        meta.name = infoName(body, mac);
+        meta.company = ''; meta.service = ''; meta.type = ''; meta.evidence = '';
+        var appearance = body.match(/Appearance:\s*0x([0-9a-f]+)/i);
+        if (appearance) {
+            meta.appearance = parseInt(appearance[1], 16);
+            // SIG appearance category occupies the upper ten bits.
+            var types = {1:'Telefoon',2:'Computer',3:'Horloge',4:'Klok',15:'Invoerapparaat',37:'Draagbaar audioapparaat'};
+            meta.type = ({2370:'Headset',2371:'Koptelefoon'})[meta.appearance] || types[meta.appearance >> 6] || '';
+            if (meta.type) meta.evidence = 'Appearance 0x' + appearance[1];
+        }
+        var modalias = body.match(/Modalias:\s*(bluetooth|usb):v([0-9a-f]{4})p[0-9a-f]{4}d[0-9a-f]{4}/i);
+        if (modalias) {
+            meta.modalias = modalias[0].replace(/^Modalias:\s*/, '');
+            // USB VID and Bluetooth SIG company ID are different namespaces.
+            if (modalias[1].toLowerCase() === 'bluetooth') meta.company = companies[parseInt(modalias[2],16)] || '';
+            if (meta.company) meta.evidence = 'Modalias ' + meta.modalias;
+        }
+        var services = [], uuidPattern = /UUID:\s*([^\n(]+)\s*\((0000[0-9a-f]{4}-0000-1000-8000-00805f9b34fb)\)/gi, uuid;
+        while ((uuid = uuidPattern.exec(body)) !== null) {
+            services.push({name:uuid[1].trim(), uuid:uuid[2].toLowerCase()});
+            // Vendor-assigned service UUID, not a manufacturer assertion.
+            if (/^0000fe/.test(uuid[2].toLowerCase()) && uuid[1].trim() !== 'Unknown') meta.service = uuid[1].trim();
+        }
+        meta.services = services;
+        if (!meta.evidence && meta.service) meta.evidence = 'Service UUID: ' + meta.service;
+        var match = body.match(/ManufacturerData.Key:\s*0x([0-9a-f]+)/i);
+        if (match) {
+            meta.companyId = parseInt(match[1], 16);
+            meta.company = companies[meta.companyId] || '';
+            meta.evidence = 'ManufacturerData 0x' + match[1];
+        }
+    }
+    clean(raw).split('\n').forEach(function(line) {
+        var header = line.match(/^Device ([0-9A-F:]{17}) \((public|random)\)/i);
+        if (header) { flush(); mac = header[1].toUpperCase(); body = ''; result[mac] = {addressType:header[2].toLowerCase()}; }
+        else if (/^\s/.test(line)) body += line + '\n';
+    });
+    flush();
+    return result;
 }
 function infoName(raw, mac) {
     var text = clean(raw), alias = text.match(/(?:^|\n)\s*Alias: (.*)/), name = text.match(/(?:^|\n)\s*Name: (.*)/);
