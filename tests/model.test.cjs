@@ -1,0 +1,35 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const M = {};
+const path = require('node:path').join(__dirname, '../shell-plugin/Model.js');
+if (fs.existsSync(path)) vm.runInNewContext(fs.readFileSync(path, 'utf8'), M);
+test('rolling signal model resolves names, prioritizes aliases and expires old samples', () => {
+  assert.equal(typeof M.update, 'function');
+  const devices = {};
+  const mac = 'AA:BB:CC:DD:EE:FF';
+  M.update(devices, {mac, name:'Watch', rssi:-80}, 1000);
+  M.update(devices, {mac, name:'', rssi:-60}, 11000);
+  assert.equal(devices[mac].ema, -73);
+  let rows = M.rows(devices, {[mac]:'My watch'}, 11000);
+  assert.equal(rows[0].label, 'My watch');
+  assert.equal(rows[0].average, -70);
+  assert.equal(rows[0].trend, '▲ sterker');
+  assert.equal(M.rows(devices, {}, 20000)[0].average, -60);
+  assert.equal(M.rows(devices, {}, 30000)[0].average, null);
+  assert.equal(M.rows(devices, {}, 30000)[0].stale, true);
+  assert.equal(M.infoName(' Name: Watch\n Alias: Kitchen watch', mac), 'Kitchen watch');
+  assert.equal(M.quality(-54), 'ZEER DICHTBIJ');
+  assert.equal(M.ratio(-100), 0);
+});
+test('parses real ANSI/prompt hexadecimal RSSI and rejects fake names', () => {
+  assert.equal(typeof M.parseLine, 'function');
+  const event = M.parseLine('\r\x1b[K[bluetoothctl]> [\x1b[0;92mCHG\x1b[0m] Device 13:6E:9F:53:6E:05 RSSI: 0xffffffa1 (-95)');
+  assert.equal(event.mac, '13:6E:9F:53:6E:05');
+  assert.equal(event.rssi, -95);
+  assert.equal(M.parseLine('[NEW] Device AA:BB:CC:DD:EE:FF AA-BB-CC-DD-EE-FF').name, '');
+  assert.equal(M.parseLine('[CHG] Device AA:BB:CC:DD:EE:FF ManufacturerData.Value: foo').name, '');
+  assert.equal(M.parseLine('[CHG] Device AA:BB:CC:DD:EE:FF Name: Watch').name, 'Watch');
+  assert.equal(M.parseLine('[CHG] Device AA:BB:CC:DD:EE:FF RSSI: 127').rssi, null);
+});

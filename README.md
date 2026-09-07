@@ -67,7 +67,7 @@ alleen de onderstaande topbar-plugin vereist Omarchy met Quickshell.
 
 ```sh
 mkdir -p ~/.config/omarchy/plugins/btfind
-cp ~/Projects/btfind/shell-plugin/manifest.json ~/Projects/btfind/shell-plugin/BtFind.qml \
+cp ~/Projects/btfind/shell-plugin/{manifest.json,BtFind.qml,Model.js} \
   ~/.config/omarchy/plugins/btfind/
 ```
 
@@ -86,12 +86,20 @@ omarchy-shell shell listPlugins | jq '.[] | select(.id == "btfind")'
 ```
 
 Rechts verschijnt een Bluetooth-knop met tooltip **Bluetooth Finder**. Klikken
-opent btfind via `omarchy-launch-floating-terminal-with-presentation` en de
-symlink `~/.local/bin/btfind`. De knop scant niet op de achtergrond en verandert
-zelf geen adapterinstellingen; de TUI start de scan zodra je haar opent.
-Het icoon gebruikt dezelfde Nerd Font-glyph als Omarchy's Bluetooth-paneel.
-Er is geen extra service of Waybar nodig. Plugin-updates installeren: kopieer
-de twee pluginbestanden opnieuw en herstart de shell.
+klapt een natief Omarchy-paneel open (zoals de bluetooth/audio/netwerk-panelen,
+zelfde styling en klik-buitenom-sluiten) — geen los terminalvenster meer. Het
+paneel toont een live apparatenlijst gesorteerd op signaalsterkte, met
+kleurgecodeerde sterktebalken en trend (▲ sterker / ▼ zwakker / ◆ stabiel).
+Enter opent de signaalmonitor met geschiedenis-graaf (laatste 90 s); loop door
+het huis en volg de trend, net als in de TUI. Scannen start alleen zolang het
+paneel open is en stopt automatisch bij sluiten; de plugin verandert zelf geen
+adapterinstellingen. Onbekende apparaten krijgen een compacte naam
+(`•` + laatste 5 tekens van het MAC); via `bluetoothctl info` worden namen
+opgelost en kun je zelf een alias geven (Enter op een apparaat), bewaard in
+`~/.config/omarchy/plugins/btfind/aliases.json`. Het icoon gebruikt dezelfde
+Nerd Font-glyph als Omarchy's Bluetooth-paneel. Er is geen extra service of
+Waybar nodig. Plugin-updates installeren: kopieer de drie pluginbestanden
+opnieuw en herstart de shell.
 
 De persoonlijke `shell.json` blijft lokaal en hoort niet in deze repository.
 Een eventuele oudere launcher-entry kun je verwijderen:
